@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>doodleloop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F7F9F8; --rule:#C6DFDB; --ink:#1F2A55; --muted:#5A6479;
+  --tip:#FFF1A6; --core:#FF4F8B; --easy:#DCE2E6; --miss:#C0392B; --btn:#1F2A55; --btn-text:#F7F9F8;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#172026; --rule:#24363D; --ink:#E9EEF5; --muted:#9AA6B8;
+    --tip:#6B6230; --core:#FF5A92; --easy:#2E3A42; --miss:#FF6B5B; --btn:#E9EEF5; --btn-text:#172026;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#172026; --rule:#24363D; --ink:#E9EEF5; --muted:#9AA6B8;
+  --tip:#6B6230; --core:#FF5A92; --easy:#2E3A42; --miss:#FF6B5B; --btn:#E9EEF5; --btn-text:#172026;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--paper);color:var(--ink);
+  font-family:'Atkinson Hyperlegible',system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.3}
+main{height:100%;max-width:560px;margin:0 auto;padding:8px 12px;display:flex;flex-direction:column;gap:6px}
+.bar{display:grid;grid-template-columns:1fr 1.3fr 1.5fr auto;align-items:center;gap:8px;height:36px;
+  font-family:'Kalam','Comic Sans MS',cursive;font-size:1.15rem;white-space:nowrap}
+.bar small{color:var(--muted);font-size:.8rem;margin-right:3px}
+.bar b{font-weight:700;font-variant-numeric:tabular-nums}
+.lives{display:flex;gap:3px;align-items:center}
+.lives svg{width:22px;height:22px;display:block}
+.lives svg path{fill:var(--core);stroke:var(--core);stroke-width:1.5;transition:fill .2s}
+.lives svg.off path{fill:none;stroke:var(--muted)}
+.lives svg.lost{animation:lost .5s ease-out}
+@keyframes lost{0%{transform:scale(1.5)}40%{transform:scale(.7) rotate(-12deg)}100%{transform:none}}
+@media (prefers-reduced-motion: reduce){ .lives svg.lost{animation:none} }
+.over{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb, var(--paper) 72%, transparent)}
+.over[hidden]{display:none}
+.card{text-align:center;background:var(--paper);border:2px solid var(--ink);border-radius:16px;padding:22px 28px;
+  box-shadow:0 8px 30px rgba(0,0,0,.18)}
+.card h2{font-family:'Kalam','Comic Sans MS',cursive;font-size:2.4rem;margin:0;line-height:1}
+.card .big{font-family:'Kalam','Comic Sans MS',cursive;font-size:1.6rem;font-weight:700;margin:10px 0 0}
+.card p{margin:2px 0 16px;color:var(--muted)}
+.board{flex:1;min-height:0;position:relative}
+canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:manipulation;cursor:crosshair;-webkit-tap-highlight-color:transparent}
+.foot{display:flex;gap:10px;align-items:center;height:48px}
+.msg{flex:1;margin:0;font-size:.92rem;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+button{font:inherit;font-weight:700;background:var(--btn);color:var(--btn-text);border:0;
+  padding:10px 18px;border-radius:999px;cursor:pointer;white-space:nowrap}
+button[hidden]{display:none}
+button:focus-visible{outline:3px solid var(--core);outline-offset:3px}
+</style>
+</head>
+<body>
+<main>
+  <div class="bar" aria-live="polite">
+    <span><small>Lv</small><b id="level">1</b></span>
+    <span><b id="score">0</b><small> pts</small></span>
+    <span><b id="time">0.0s</b> <small id="bonus">×2.0</small></span>
+    <span class="lives" id="lives" aria-label="Lives"></span>
+  </div>
+  <div class="board"><canvas id="board" aria-label="Doodle board. Tap inside the sealed loop."></canvas>
+    <div class="over" id="over" hidden><div class="card" role="dialog" aria-labelledby="ovt">
+      <h2 id="ovt">Game over</h2>
+      <div class="big" id="ovscore"></div>
+      <p id="ovbest"></p>
+      <button id="again">Play again</button>
+    </div></div>
+  </div>
+  <div class="foot">
+    <p class="msg" id="msg" aria-live="polite"></p>
+    <button id="next" hidden>Next</button>
+  </div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const cv = $('#board'), ctx = cv.getContext('2d');
+const ASPECT = 1.3, MAX_LIVES = 3, EASY = 0.2;
+let G = null, reveal = 0;
+let L = {s:1, ox:0, oy:0, w:0, h:0, dpr:1};
+let state;
+let best = 0;
+try { best = parseInt(localStorage.getItem('inside-loop-best') || '0', 10) || 0; } catch(e) {}
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const hex = h => { h = h.replace('#',''); return [0,2,4].map(i => parseInt(h.slice(i,i+2),16)); };
+const mix = (a,b,t) => `rgb(${a.map((v,i)=>Math.round(v+(b[i]-v)*t)).join(',')})`;
+const rnd = (lo,hi) => lo + Math.random()*(hi-lo);
+
+// Level curve: size grows until level 8. After that, small decoy loops start appearing,
+// one more per level (up to 6), each a bit bigger, with gaps that slowly shrink.
+const decoysFor = lv => Math.max(0, Math.min(6, lv-8));
+const decoySize = lv => 5 + 3*Math.max(0, lv-9);          // max nodes per decoy
+const gapLen = lv => Math.max(0.6, 1.1 - 0.05*Math.max(0, lv-9)); // gap length in branch widths
+
+function generate(level){
+  const n0 = Math.min(4 + level*2, 20);
+  const ea = n0, eb = n0*ASPECT;                      // blob semi-axes (grid units)
+  const N = Math.ceil(Math.hypot(ea,eb)*1.15/2) + 2;  // nodes per side
+  const GW = 2*N+1, GH = GW, NN = N*N, C = GW/2;
+  const th = 0;                                        // straight horizontal/vertical grid
+  const cs = Math.cos(th), sn = Math.sin(th);
+  const ph = [0,0,0].map(()=>rnd(0,Math.PI*2));
+
+  // Blob mask, defined in screen orientation so the doodle stays portrait.
+  const mask = new Uint8Array(NN), masked = [];
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    const x=2*i+1.5-C, y=2*j+1.5-C, qx=cs*x-sn*y, qy=sn*x+cs*y;
+    const dx=qx/ea, dy=qy/eb, t=Math.atan2(dy,dx);
+    const R = 0.88*(1+0.12*Math.sin(2*t+ph[0])+0.09*Math.sin(3*t+ph[1])+0.05*Math.sin(5*t+ph[2]));
+    if (Math.hypot(dx,dy) < R){ mask[j*N+i]=1; masked.push(j*N+i); }
+  }
+
+  // Main tree seeded at the middle; small capped decoy trees seeded elsewhere, all grown at once.
+  const D = decoysFor(level), cap = decoySize(level);
+  const nd = (p,q) => Math.hypot(p%N-q%N, (p/N|0)-(q/N|0));
+  let mid=masked[0], md=1e9;
+  for (const m of masked){ const d=Math.hypot(2*(m%N)+1.5-C, 2*(m/N|0)+1.5-C); if (d<md){ md=d; mid=m; } }
+  const seeds=[mid];
+  for (let tries=0; seeds.length<1+D && tries<2000; tries++){
+    const m=masked[Math.random()*masked.length|0];
+    if (seeds.every(s=>nd(m,s)>=4)) seeds.push(m);
+  }
+  const comp = new Int16Array(NN).fill(-1), size=new Int32Array(seeds.length), adj = Array.from({length:NN},()=>[]), fr=[];
+  const pushF = a => { const i=a%N, j=a/N|0;
+    for (const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){ const ii=i+di, jj=j+dj;
+      if (ii<0||jj<0||ii>=N||jj>=N) continue; const b=jj*N+ii; if (mask[b] && comp[b]<0) fr.push([a,b]); } };
+  seeds.forEach((s,c)=>{ comp[s]=c; size[c]=1; pushF(s); });
+  while (fr.length){
+    const x=Math.random()*fr.length|0, [a,b]=fr[x]; fr[x]=fr[fr.length-1]; fr.pop();
+    const c=comp[a];
+    if (comp[b]>=0 || (c>0 && size[c]>=cap)) continue;
+    comp[b]=c; size[c]++; adj[a].push(b); adj[b].push(a); pushF(b);
+  }
+
+  // Thicken trees into cells: node cells plus the cells between connected nodes.
+  const tree = new Uint8Array(GW*GH), cc = new Int16Array(GW*GH).fill(-1);
+  const pxc = k => 2*(k%N)+1, pyc = k => 2*(k/N|0)+1;
+  for (let k=0;k<NN;k++){ if (comp[k]<0) continue;
+    const c=pyc(k)*GW+pxc(k); tree[c]=1; cc[c]=comp[k];
+    for (const b of adj[k]){ const e=((pyc(k)+pyc(b))/2)*GW+(pxc(k)+pxc(b))/2; tree[e]=1; cc[e]=comp[k]; }
+  }
+
+  // Trace each tree's outline (always one closed, non-crossing loop per tree).
+  const VW = GW+1, next = new Map(), ecomp = new Map();
+  const add = (x1,y1,x2,y2,c) => { const k=y1*VW+x1; next.set(k, y2*VW+x2); ecomp.set(k,c); };
+  for (let y=0;y<GH;y++) for (let x=0;x<GW;x++){
+    const k=y*GW+x; if (!tree[k]) continue; const c=cc[k];
+    if (!tree[k-GW]) add(x,y,x+1,y,c);
+    if (!tree[k+1]) add(x+1,y,x+1,y+1,c);
+    if (!tree[k+GW]) add(x+1,y+1,x,y+1,c);
+    if (!tree[k-1]) add(x,y+1,x,y,c);
+  }
+  // Smooth warp + rotation: organic bends and diagonals, but never folds (injective map).
+  const wp=[0,0,0,0].map(()=>rnd(0,Math.PI*2)), A1=0, f1=0, A2=0, f2=0;   // no bending
+  const tw = [];
+  const T = (u,v) => { const x=u-C, y=v-C;
+    const wx = x + A1*Math.sin(f1*y+wp[0]) + A2*Math.sin(f2*(x+y)*0.7071+wp[1]);
+    const wy = y + A1*Math.sin(f1*x+wp[2]) + A2*Math.sin(f2*(x-y)*0.7071+wp[3]);
+    let X0=cs*wx-sn*wy, Y0=sn*wx+cs*wy;
+    for (const t of tw){ const dx=X0-t.x, dy=Y0-t.y, a=t.a*Math.exp(-(dx*dx+dy*dy)/t.s2), c=Math.cos(a), s=Math.sin(a);
+      X0=t.x+c*dx-s*dy; Y0=t.y+s*dx+c*dy; }
+    return [X0,Y0]; };
+  const jit = new Map();
+  const J = k => { if (!jit.has(k)) jit.set(k,[rnd(-.2,.2),rnd(-.2,.2)]); return jit.get(k); };
+  const used = new Set(), loops = [];
+  for (const s0 of next.keys()){
+    if (used.has(s0)) continue;
+    const loop=[]; let v=s0;
+    do { used.add(v); loop.push(v); v=next.get(v); } while (v!==s0 && loop.length<400000);
+    const pts=[];
+    for (let i=0;i<loop.length;i++){
+      const a=loop[i], b=loop[(i+1)%loop.length];
+      const ax=a%VW, ay=a/VW|0, bx=b%VW, by=b/VW|0, ja=J(a), jb=J(b), r=rnd(-.12,.12);
+      pts.push(T(ax+ja[0], ay+ja[1]));
+      pts.push(T((ax+ja[0]+bx+jb[0])/2 - (by-ay)*r, (ay+ja[1]+by+jb[1])/2 + (bx-ax)*r));
+    }
+    loops.push({pts, comp:ecomp.get(s0), gap:null});
+  }
+
+  // Depth = distance from the open space around the doodle (the easy side).
+  const foot = new Uint8Array(GW*GH);
+  for (let k=0;k<NN;k++) if (comp[k]>=0){
+    const bx=2*(k%N), by=2*(k/N|0);
+    for (let yy=by;yy<=by+2;yy++) for (let xx=bx;xx<=bx+2;xx++) foot[yy*GW+xx]=1;
+  }
+  const open=[];
+  for (let y=1;y<GH-1;y++) for (let x=1;x<GW-1;x++){ const k=y*GW+x;
+    if (!foot[k] && (foot[k-1]||foot[k+1]||foot[k-GW]||foot[k+GW])) open.push([x,y]); }
+  const all=[]; for (let k=0;k<GW*GH;k++) if (tree[k]) all.push(k);
+  const sealedComp = 0;   // the main tree is always the sealed one
+  const rim = new Float32Array(GW*GH); let maxRim=0, minRim=1e9, deep=-1;
+  for (const k of all){ const x=k%GW, y=k/GW|0; let m=1e18;
+    for (const [ox,oy] of open){ const d=(ox-x)**2+(oy-y)**2; if (d<m) m=d; }
+    rim[k]=Math.sqrt(m); minRim=Math.min(minRim,rim[k]);
+    if (cc[k]===sealedComp && rim[k]>maxRim){ maxRim=rim[k]; deep=k; } }
+  for (const k of all) rim[k]=(rim[k]-minRim)/Math.max(1e-6,maxRim-minRim);
+
+  // Every loop except the main one gets a gap.
+  let sealed = null;
+  for (const lp of loops){
+    if (lp.comp===sealedComp) sealed=lp;
+    else lp.gap = {g: Math.random()*lp.pts.length|0, len: gapLen(level)};
+  }
+  const cells = all.filter(k=>cc[k]===sealedComp).sort((a,b)=>rim[a]-rim[b]);
+  const cpos = new Map(); for (const k of cells) cpos.set(k, T(k%GW+.5, (k/GW|0)+.5));
+
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  for (const lp of loops) for (const [x,y] of lp.pts){ minX=Math.min(minX,x); maxX=Math.max(maxX,x); minY=Math.min(minY,y); maxY=Math.max(maxY,y); }
+  return {loops, sealed, cells, cpos, rim, center:deep, nCells:all.length, bbox:{minX,minY,maxX,maxY}};
+}
+
+function pip(u,v,p){
+  let inside=false;
+  for (let i=0,j=p.length-1;i<p.length;j=i++){
+    const [xi,yi]=p[i],[xj,yj]=p[j];
+    if ((yi>v)!==(yj>v) && u < (xj-xi)*(v-yi)/(yj-yi)+xi) inside=!inside;
+  }
+  return inside;
+}
+function cellNear(u,v){
+  let bk=G.center, bd=1e18;
+  for (const k of G.cells){ const [x,y]=G.cpos.get(k); const d=(x-u)**2+(y-v)**2; if (d<bd){ bd=d; bk=k; } }
+  return bk;
+}
+
+function layout(){
+  const box = cv.parentElement.getBoundingClientRect(), w = box.width, h = box.height;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+  const b=G.bbox, pad=8, bw=b.maxX-b.minX, bh=b.maxY-b.minY;
+  const s=Math.min((w-2*pad)/bw,(h-2*pad)/bh);
+  L = {s, ox:(w-s*bw)/2 - s*b.minX, oy:(h-s*bh)/2 - s*b.minY, w, h, dpr};
+  draw();
+}
+const X = u => L.ox+u*L.s, Y = v => L.oy+v*L.s;
+
+function gapGeom(lp){
+  const p=lp.pts, n=p.length, g=lp.gap.g, target=Math.max(lp.gap.len*L.s, 7);
+  let acc=0, m=0;
+  while (acc<target && m<n-3){ const a=p[(g+m)%n], b=p[(g+m+1)%n]; acc+=Math.hypot(b[0]-a[0],b[1]-a[1])*L.s; m++; }
+  const c=p[(g+(m>>1))%n], d=p[(g+((m+1)>>1))%n];
+  return {g, m, mx:(X(c[0])+X(d[0]))/2, my:(Y(c[1])+Y(d[1]))/2};
+}
+function tracePath(lp, forceClosed){
+  const p=lp.pts, n=p.length; ctx.beginPath();
+  if (!lp.gap || forceClosed){ p.forEach(([u,v],i)=> i?ctx.lineTo(X(u),Y(v)):ctx.moveTo(X(u),Y(v))); ctx.closePath(); return; }
+  const q=gapGeom(lp);
+  for (let i=q.m;i<=n;i++){ const [u,v]=p[(q.g+i)%n]; i===q.m?ctx.moveTo(X(u),Y(v)):ctx.lineTo(X(u),Y(v)); }
+}
+
+function star(x,y,r,fill,stroke){
+  ctx.beginPath();
+  for (let i=0;i<10;i++){ const a=-Math.PI/2+i*Math.PI/5, rr=i%2?r*.45:r; ctx.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr); }
+  ctx.closePath(); ctx.fillStyle=fill; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle=stroke; ctx.stroke();
+}
+
+function draw(){
+  const c = {paper:css('--paper'), rule:css('--rule'), ink:css('--ink'), tip:hex(css('--tip')), core:hex(css('--core')), miss:css('--miss'), easy:css('--easy')};
+  ctx.setTransform(L.dpr,0,0,L.dpr,0,0);
+  ctx.fillStyle=c.paper; ctx.fillRect(0,0,L.w,L.h);
+  ctx.strokeStyle=c.rule; ctx.lineWidth=1;
+  for (let y=26; y<L.h; y+=26){ ctx.beginPath(); ctx.moveTo(0,y+.5); ctx.lineTo(L.w,y+.5); ctx.stroke(); }
+
+  if (reveal>0){
+    ctx.save(); ctx.globalAlpha=reveal; tracePath(G.sealed,true); ctx.clip();
+    ctx.fillStyle=c.easy; ctx.fillRect(0,0,L.w,L.h);
+    const half=L.s*0.82;
+    for (const k of G.cells){
+      const r=G.rim[k], [u,v]=G.cpos.get(k);
+      ctx.fillStyle = r<EASY ? c.easy : mix(c.tip,c.core,Math.pow((r-EASY)/(1-EASY),1.2));
+      ctx.fillRect(X(u)-half, Y(v)-half, 2*half, 2*half);
+    }
+    ctx.restore();
+  }
+
+  ctx.strokeStyle=c.ink; ctx.lineWidth=Math.max(1.3,Math.min(2.4,L.s*.17)); ctx.lineJoin='round'; ctx.lineCap='butt';
+  for (const lp of G.loops){ tracePath(lp); ctx.stroke(); }
+
+  if (reveal>0){
+    ctx.save(); ctx.globalAlpha=reveal;
+    for (const lp of G.loops) if (lp.gap){
+      const q=gapGeom(lp); ctx.beginPath(); ctx.arc(q.mx,q.my,Math.max(9,L.s*1.3),0,Math.PI*2);
+      ctx.lineWidth=2.5; ctx.strokeStyle=c.miss; ctx.stroke();
+    }
+    const [cu,cv2]=G.cpos.get(G.center);
+    star(X(cu), Y(cv2), Math.max(8,L.s*.8), c.paper, c.ink);
+    ctx.restore();
+  }
+  const t=state.tap;
+  if (t){
+    const x=X(t.u), y=Y(t.v);
+    if (t.inside){
+      ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.fillStyle=c.ink; ctx.fill();
+      ctx.lineWidth=2.5; ctx.strokeStyle=c.paper; ctx.stroke();
+    } else {
+      ctx.lineWidth=3.5; ctx.lineCap='round'; ctx.strokeStyle=c.miss;
+      ctx.beginPath(); ctx.moveTo(x-7,y-7); ctx.lineTo(x+7,y+7); ctx.moveTo(x+7,y-7); ctx.lineTo(x-7,y+7); ctx.stroke();
+      ctx.lineCap='butt';
+    }
+  }
+}
+
+// Par time grows with doodle size, then tightens past the size cap (level 8).
+const parTime = () => Math.max(1.2, (2 + G.nCells/80) * (state.level>8 ? Math.pow(0.88, state.level-8) : 1));
+const speedMult = t => 0.5 + 1.5*Math.exp(-t/parTime());
+const levelMult = () => 1 + 0.25*(state.level-1);
+function tick(){
+  if (state.phase!=='play') return;
+  const t=(performance.now()-state.t0)/1000;
+  $('#time').textContent=t.toFixed(1)+'s';
+  $('#bonus').textContent='×'+speedMult(t).toFixed(1);
+  requestAnimationFrame(tick);
+}
+
+function animateReveal(){
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches){ reveal=1; draw(); return; }
+  const t0=performance.now();
+  const step = now => { reveal=Math.min(1,(now-t0)/450); draw(); if (reveal<1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+
+function updateUI(){
+  $('#level').textContent=state.level;
+  $('#score').textContent=state.score;
+  const heart='<path d="M12 20.5s-7.5-4.6-7.5-10A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.9c0 5.4-7.5 10-7.5 10z"/>';
+  $('#lives').innerHTML = Array.from({length:MAX_LIVES},(_,i)=>
+    `<svg viewBox="0 0 24 24" class="${i<state.lives?'':'off'} ${i===state.lives && state.justLost?'lost':''}" aria-hidden="true">${heart}</svg>`).join('');
+  $('#lives').setAttribute('aria-label', `${state.lives} ${state.lives===1?'life':'lives'} left`);
+  state.justLost=false;
+}
+function setMsg(t){ $('#msg').textContent=t; }
+
+function newRound(){
+  G = generate(state.level); reveal=0; state.tap=null; state.phase='play'; $('#over').hidden=true;
+  $('#next').hidden=true;
+  const n=G.loops.length;
+  setMsg(n>1 ? `${n} loops, only 1 sealed. The rest have a gap.`
+       : state.level===1 ? 'Tap inside the loop. Deep and fast = more points. Near the edge loses points.'
+       : 'Tap inside the loop.');
+  layout(); updateUI();
+  state.t0=performance.now(); requestAnimationFrame(tick);
+}
+function newGame(){ state={level:1,score:0,lives:MAX_LIVES,phase:'play',tap:null}; newRound(); }
+
+// Double tap / double click on the board after a result = Next.
+let lastTap=null;
+function doubleTapNext(e){
+  if (state.phase!=='result') return;
+  const now=performance.now();
+  if (lastTap && now-lastTap.t<400 && Math.hypot(e.clientX-lastTap.x, e.clientY-lastTap.y)<40){ lastTap=null; $('#next').click(); }
+  else lastTap={t:now, x:e.clientX, y:e.clientY};
+}
+cv.addEventListener('pointerdown', e => {
+  if (state.phase!=='play') return doubleTapNext(e);
+  lastTap=null;
+  const r=cv.getBoundingClientRect();
+  const u=(e.clientX-r.left-L.ox)/L.s, v=(e.clientY-r.top-L.oy)/L.s;
+  const inside=pip(u,v,G.sealed.pts);
+  const inOpen=!inside && G.loops.some(lp=>lp.gap && pip(u,v,lp.pts));
+  const secs=(performance.now()-state.t0)/1000, sp=speedMult(secs);
+  $('#time').textContent=secs.toFixed(1)+'s'; $('#bonus').textContent='×'+sp.toFixed(1);
+  state.tap={u,v,inside};
+  const btn=$('#next');
+  if (inside){
+    const r=G.rim[cellNear(u,v)];
+    state.phase='result';
+    if (r<EASY){
+      const pen=Math.round(20*levelMult());
+      state.score=Math.max(0,state.score-pen);
+      setMsg(`Too close to the edge. −${pen}`);
+    } else {
+      const depth=Math.round(20+80*Math.pow((r-EASY)/(1-EASY),1.5));
+      const pts=Math.round(depth*sp*levelMult());
+      state.score+=pts;
+      setMsg(`+${pts} · depth ${depth} · ×${sp.toFixed(1)} speed · ×${+levelMult().toFixed(2)} lvl`);
+    }
+    btn.textContent='Next';
+  } else {
+    state.lives--; state.justLost=true;
+    const why = inOpen ? 'Open loop (gap circled).' : 'Outside.';
+    if (state.lives>0){ state.phase='result'; setMsg(`${why} ${state.lives} ${state.lives===1?'life':'lives'} left.`); btn.textContent='Next'; }
+    else { state.phase='over'; setMsg(`${why} No lives left.`); }
+  }
+  if (state.score>best){ best=state.score; try{ localStorage.setItem('inside-loop-best',String(best)); }catch(e){} }
+  updateUI(); animateReveal();
+  if (state.phase==='over'){
+    $('#ovscore').textContent=`${state.score.toLocaleString()} pts`;
+    $('#ovbest').textContent= state.score>0 && state.score>=best ? 'New best!' : `Best: ${best.toLocaleString()}`;
+    setTimeout(()=>{ $('#over').hidden=false; $('#again').focus({preventScroll:true}); }, 1100);
+  } else { btn.hidden=false; btn.focus({preventScroll:true}); }
+});
+
+$('#again').addEventListener('click', newGame);
+$('#next').addEventListener('click', () => {
+  if (state.phase==='over') return newGame();
+  if (state.tap && state.tap.inside) state.level++;
+  newRound();
+});
+
+let rt; window.addEventListener('resize', ()=>{ clearTimeout(rt); rt=setTimeout(layout,120); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+newGame();
+</script>
+</body>
+</html>
